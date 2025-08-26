@@ -120,16 +120,21 @@ def opret_opgave(indsats: dict, item_data: dict) -> None:
                 opgave["workflowState"]["name"] == "Aktiv"):
                     return None
     
-    nexus.opgaver.opret_opgave(
-            objekt=indsats,
-            opgave_type="Indsatser til økonomi - voksne",
-            titel="Indsats til økonomi - voksne",
-            ansvarlig_organisation="Regnskab BSF",
-            start_dato=date.today(),
-            forfald_dato=date.today(),            
-            beskrivelse="Opgave til registrering af indsats i økonomi-systemet.",
-            ansvarlig_medarbejder=None            
-        )
+    try:
+        nexus.opgaver.opret_opgave(
+                objekt=indsats,
+                opgave_type="Indsatser til økonomi - voksne",
+                titel="Indsats til økonomi - voksne",
+                ansvarlig_organisation="Regnskab BSF",
+                start_dato=date.today(),
+                forfald_dato=date.today(),            
+                beskrivelse="Opgave til registrering af indsats i økonomi-systemet.",
+                ansvarlig_medarbejder=None            
+            )
+    except ValueError as ve:
+        pass
+    except Exception as e:
+        raise WorkItemError(f"Fejl ved oprettelse af opgave: {e}")    
     
     tracker.track_task(proces_navn)
 
