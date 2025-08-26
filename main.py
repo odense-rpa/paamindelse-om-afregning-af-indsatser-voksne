@@ -10,6 +10,12 @@ from kmd_nexus_client import NexusClientManager
 from odk_tools.tracking import Tracker
 from odk_tools.reporting import Reporter
 from process.config import get_excel_mapping, load_excel_mapping
+from kmd_nexus_client.tree_helpers import (
+    filter_by_path, filter_by_predicate,    
+)
+from datetime import date, datetime
+from dateutil.parser import parse
+from zoneinfo import ZoneInfo
 
 nexus: NexusClientManager
 nexus_database_client: NexusDatabaseClient
@@ -23,6 +29,7 @@ async def populate_queue(workqueue: Workqueue):
     regler = get_excel_mapping()
     for organisation in regler["Organisationer"]:
         modificerede_indsatser = nexus_database_client.get_modified_grants_by_organisation_name(organisation_name=organisation,  days_back=4, workflow_states=regler["Status på indsats"])
+
         for indsats in modificerede_indsatser:
             data = {
                 "cpr": indsats["business_key"],
@@ -34,19 +41,97 @@ async def populate_queue(workqueue: Workqueue):
             workqueue.add_item(data=data, reference=f"{indsats['id']}")
 
 async def process_workqueue(workqueue: Workqueue):
-    
+    regler = get_excel_mapping()
     for item in workqueue:
-        with item:
-            data = item.data  # Item data deserialized from json as dict
- 
+        with item:            
             try:
-                # Process the item here
-                pass
+                data = item.data
+                indsats = hent_indsats(item_data=data)
+                
+                if not indsats:
+                    return None
+                
+                white_listed_leverandør = kontroller_leverandør(indsats=indsats, regler=regler)
+
+                if not white_listed_leverandør:
+                    continue
+
+                opret_opgave(indsats=indsats, item_data=data)
             except WorkItemError as e:
-                # A WorkItemError represents a soft error that indicates the item should be passed to manual processing or a business logic fault
                 logger.error(f"Error processing item: {data}. Error: {e}")
                 item.fail(str(e))
 
+def hent_indsats(item_data: dict) -> dict|None:
+    borger = nexus.borgere.hent_borger(item_data["cpr"])
+
+    if not borger:
+        return None
+
+    pathway = nexus.borgere.hent_visning(borger=borger)
+
+    if pathway is None:
+        raise ValueError(
+            f"Kunne ikke finde -Alt for borger {borger['patientIdentifier']['identifier']}"
+        )
+
+    indsats_referencer = nexus.borgere.hent_referencer(visning=pathway)            
+
+    filtrerede_indsats_referencer = filter_by_path(
+        indsats_referencer,
+        path_pattern="/*/*/Indsatser/basketGrantReference",
+        active_pathways_only=False,
+    )
+    
+    indsatser = filter_by_predicate(
+        roots=filtrerede_indsats_referencer,
+        predicate=lambda x: x["grantId"] == item_data["indsats_id"]
+    )
+
+    if not indsatser:
+        return None
+
+    indsats = nexus.indsatser.hent_indsats(indsatser[0])
+
+    return indsats
+
+def kontroller_leverandør(indsats: dict, regler: dict) -> bool:
+    felt_værdier = nexus.indsatser.hent_indsats_elementer(indsats=indsats)
+
+    if not felt_værdier:
+        return False
+
+    if felt_værdier["supplier"]["supplier"]["name"] in regler["Irrelevante leverandører"]:
+        return False
+
+    return True
+
+def opret_opgave(indsats: dict, item_data: dict) -> None:
+    opgaver = nexus.opgaver.hent_opgave_historik(objekt=indsats)
+    indsats_ændring = datetime.strptime(item_data["sidste_aendring"], "%d-%m-%Y %H:%M:%S")
+    indsats_ændring = indsats_ændring.replace(tzinfo=ZoneInfo("Europe/Copenhagen"))
+
+    if opgaver is not None:
+        for opgave in opgaver:
+            opgave_ændring = parse(opgave["lastStateChangeDate"])
+            opgave_ændring = opgave_ændring.replace(tzinfo=ZoneInfo("Europe/Copenhagen"))
+            
+            if opgave["type"]["name"] == "Indsatser til økonomi - voksne":
+                if (opgave_ændring > indsats_ændring or
+                opgave["workflowState"]["name"] == "Aktiv"):
+                    return None
+    
+    nexus.opgaver.opret_opgave(
+            objekt=indsats,
+            opgave_type="Indsatser til økonomi - voksne",
+            titel="Indsats til økonomi - voksne",
+            ansvarlig_organisation="Regnskab BSF",
+            start_dato=date.today(),
+            forfald_dato=date.today(),            
+            beskrivelse="Opgave til registrering af indsats i økonomi-systemet.",
+            ansvarlig_medarbejder=None            
+        )
+    
+    tracker.track_task(proces_navn)
 
 if __name__ == "__main__":
     logging.basicConfig(

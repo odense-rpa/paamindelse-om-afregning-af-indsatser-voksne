@@ -11,6 +11,8 @@
             "program": "main.py",
             "console": "integratedTerminal",
             "args": [
+                "--excel-file",
+                "G:/RPA/Leverancer/Påmindelse om afregning af indsatser voksne/Regelsæt.xlsx"
             ]
         },
         {
@@ -20,7 +22,9 @@
             "program": "main.py",
             "console": "integratedTerminal",
             "args": [
-                "--queue"
+                "--queue",
+                "--excel-file",
+                "G:/RPA/Leverancer/Påmindelse om afregning af indsatser voksne/Regelsæt.xlsx"
             ]
         }
     ]
