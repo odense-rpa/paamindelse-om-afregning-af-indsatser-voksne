@@ -132,7 +132,7 @@ def opret_opgave(indsats: dict, item_data: dict) -> None:
                 ansvarlig_medarbejder=None            
             )
     except ValueError as ve:
-        pass
+        return
     except Exception as e:
         raise WorkItemError(f"Fejl ved oprettelse af opgave: {e}")    
     
