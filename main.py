@@ -164,7 +164,7 @@ if __name__ == "__main__":
     if not os.path.isfile(args.excel_file):
         raise FileNotFoundError(f"Excel file not found: {args.excel_file}")
 
-    # Load POF mapping data once on startup
+    # Load excel mapping data once on startup
     load_excel_mapping(args.excel_file)
 
     nexus_credential = Credential.get_credential("KMD Nexus - produktion")
