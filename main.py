@@ -168,8 +168,7 @@ if __name__ == "__main__":
     load_excel_mapping(args.excel_file)
 
     nexus_credential = Credential.get_credential("KMD Nexus - produktion")
-    nexus_database_credential = Credential.get_credential("KMD Nexus - database")
-    xflow_credential = Credential.get_credential("Xflow - produktion")
+    nexus_database_credential = Credential.get_credential("KMD Nexus - database")    
     tracking_credential = Credential.get_credential("Odense SQL Server")
     reporting_credential = Credential.get_credential("RoboA")
 
