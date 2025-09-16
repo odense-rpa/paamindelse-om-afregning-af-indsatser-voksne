@@ -150,8 +150,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=proces_navn)
     parser.add_argument(
         "--excel-file",
-        default="./Regler.xlsx",
-        help="Path to the Excel file containing mapping data (default: ./Regler.xlsx)",
+        default="./Regelsæt.xlsx",
+        help="Path to the Excel file containing mapping data (default: ./Regelsæt.xlsx)",
     )
     parser.add_argument(
         "--queue",
