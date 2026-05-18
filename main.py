@@ -4,13 +4,19 @@ import logging
 import sys
 import os
 
-from automation_server_client import AutomationServer, Workqueue, WorkItemError, Credential
+from automation_server_client import (
+    AutomationServer,
+    Workqueue,
+    WorkItemError,
+    Credential,
+)
 from nexus_database_client import NexusDatabaseClient
 from kmd_nexus_client import NexusClientManager
 from odk_tools.tracking import Tracker
 from process.config import get_excel_mapping, load_excel_mapping
 from kmd_nexus_client.tree_helpers import (
-    filter_by_path, filter_by_predicate,    
+    filter_by_path,
+    filter_by_predicate,
 )
 from datetime import date, datetime
 from dateutil.parser import parse
@@ -23,33 +29,45 @@ tracker: Tracker
 proces_navn = "Påmindelse om afregning af indsatser (voksne)"
 logger = logging.getLogger(proces_navn)
 
+
 async def populate_queue(workqueue: Workqueue):
     regler = get_excel_mapping()
     for organisation in regler["Organisationer"]:
-        modificerede_indsatser = nexus_database_client.get_modified_grants_by_organisation_name(organisation_name=organisation,  days_back=4, workflow_states=regler["Status på indsats"])
+        modificerede_indsatser = (
+            nexus_database_client.get_modified_grants_by_organisation_name(
+                organisation_name=organisation,
+                days_back=4,
+                workflow_states=regler["Status på indsats"],
+            )
+        )
 
         for indsats in modificerede_indsatser:
             data = {
                 "cpr": indsats["business_key"],
                 "indsats_id": indsats["id"],
                 "indsats_navn": indsats["name"],
-                "sidste_aendring": indsats["last_state_change"].strftime("%d-%m-%Y %H:%M:%S"),
+                "sidste_aendring": indsats["last_state_change"].strftime(
+                    "%d-%m-%Y %H:%M:%S"
+                ),
             }
-                        
+
             workqueue.add_item(data=data, reference=f"{indsats['id']}")
+
 
 async def process_workqueue(workqueue: Workqueue):
     regler = get_excel_mapping()
     for item in workqueue:
-        with item:            
+        with item:
             try:
                 data = item.data
                 indsats = hent_indsats(item_data=data)
-                
+
                 if not indsats:
                     return None
-                
-                white_listed_leverandør = kontroller_leverandør(indsats=indsats, regler=regler)
+
+                white_listed_leverandør = kontroller_leverandør(
+                    indsats=indsats, regler=regler
+                )
 
                 if not white_listed_leverandør:
                     continue
@@ -59,7 +77,8 @@ async def process_workqueue(workqueue: Workqueue):
                 logger.error(f"Error processing item: {data}. Error: {e}")
                 item.fail(str(e))
 
-def hent_indsats(item_data: dict) -> dict|None:
+
+def hent_indsats(item_data: dict) -> dict | None:
     borger = nexus.borgere.hent_borger(item_data["cpr"])
 
     if not borger:
@@ -72,17 +91,17 @@ def hent_indsats(item_data: dict) -> dict|None:
             f"Kunne ikke finde -Alt for borger {borger['patientIdentifier']['identifier']}"
         )
 
-    indsats_referencer = nexus.borgere.hent_referencer(visning=pathway)            
+    indsats_referencer = nexus.borgere.hent_referencer(visning=pathway)
 
     filtrerede_indsats_referencer = filter_by_path(
         indsats_referencer,
         path_pattern="/*/*/Indsatser/basketGrantReference",
         active_pathways_only=False,
     )
-    
+
     indsatser = filter_by_predicate(
         roots=filtrerede_indsats_referencer,
-        predicate=lambda x: x["grantId"] == item_data["indsats_id"]
+        predicate=lambda x: x["grantId"] == item_data["indsats_id"],
     )
 
     if not indsatser:
@@ -92,59 +111,76 @@ def hent_indsats(item_data: dict) -> dict|None:
 
     return indsats
 
+
 def kontroller_leverandør(indsats: dict, regler: dict) -> bool:
     felt_værdier = nexus.indsatser.hent_indsats_elementer(indsats=indsats)
 
     if not felt_værdier:
         return False
 
-    if felt_værdier["supplier"]["supplier"]["name"] in regler["Irrelevante leverandører"]:
+    supplier = felt_værdier.get("supplier") if isinstance(felt_værdier, dict) else None
+    supplier_data = supplier.get("supplier") if isinstance(supplier, dict) else None
+    supplier_name = (
+        supplier_data.get("name") if isinstance(supplier_data, dict) else None
+    )
+
+    # If supplier information is missing, this grant should not be processed.
+    if not supplier_name:
+        return False
+
+    if supplier_name in regler["Irrelevante leverandører"]:
         return False
 
     return True
 
+
 def opret_opgave(indsats: dict, item_data: dict) -> None:
     opgaver = nexus.opgaver.hent_opgave_historik(objekt=indsats)
-    indsats_ændring = datetime.strptime(item_data["sidste_aendring"], "%d-%m-%Y %H:%M:%S")
+    indsats_ændring = datetime.strptime(
+        item_data["sidste_aendring"], "%d-%m-%Y %H:%M:%S"
+    )
     indsats_ændring = indsats_ændring.replace(tzinfo=ZoneInfo("Europe/Copenhagen"))
 
     if opgaver is not None:
         for opgave in opgaver:
             opgave_ændring = parse(opgave["lastStateChangeDate"])
-            opgave_ændring = opgave_ændring.replace(tzinfo=ZoneInfo("Europe/Copenhagen"))
-            
+            opgave_ændring = opgave_ændring.replace(
+                tzinfo=ZoneInfo("Europe/Copenhagen")
+            )
+
             if opgave["type"]["name"] == "Indsatser til økonomi - voksne":
-                if (opgave_ændring > indsats_ændring or
-                opgave["workflowState"]["name"] == "Aktiv"):
+                if (
+                    opgave_ændring > indsats_ændring
+                    or opgave["workflowState"]["name"] == "Aktiv"
+                ):
                     return None
-    
+
     try:
         nexus.opgaver.opret_opgave(
-                objekt=indsats,
-                opgave_type="Indsatser til økonomi - voksne",
-                titel="Indsats til økonomi - voksne",
-                ansvarlig_organisation="Regnskab BSF",
-                start_dato=date.today(),
-                forfald_dato=date.today(),            
-                beskrivelse="Opgave til registrering af indsats i økonomi-systemet.",
-                ansvarlig_medarbejder=None            
-            )
+            objekt=indsats,
+            opgave_type="Indsatser til økonomi - voksne",
+            titel="Indsats til økonomi - voksne",
+            ansvarlig_organisation="Regnskab BSF",
+            start_dato=date.today(),
+            forfald_dato=date.today(),
+            beskrivelse="Opgave til registrering af indsats i økonomi-systemet.",
+            ansvarlig_medarbejder=None,
+        )
     except ValueError:
         return
     except Exception as e:
-        raise WorkItemError(f"Fejl ved oprettelse af opgave: {e}")    
-    
+        raise WorkItemError(f"Fejl ved oprettelse af opgave: {e}")
+
     tracker.track_task(proces_navn)
 
+
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO        
-    )
+    logging.basicConfig(level=logging.INFO)
 
     ats = AutomationServer.from_environment()
     workqueue = ats.workqueue()
 
-     # Parse command line arguments
+    # Parse command line arguments
     parser = argparse.ArgumentParser(description=proces_navn)
     parser.add_argument(
         "--excel-file",
@@ -166,26 +202,25 @@ if __name__ == "__main__":
     load_excel_mapping(args.excel_file)
 
     nexus_credential = Credential.get_credential("KMD Nexus - produktion")
-    nexus_database_credential = Credential.get_credential("KMD Nexus - database")    
+    nexus_database_credential = Credential.get_credential("KMD Nexus - database")
     tracking_credential = Credential.get_credential("Odense SQL Server")
-    
+
     nexus = NexusClientManager(
         client_id=nexus_credential.username,
         client_secret=nexus_credential.password,
         instance=nexus_credential.data["instance"],
-    )    
-    
+    )
+
     nexus_database_client = NexusDatabaseClient(
-        host = nexus_database_credential.data["hostname"],
-        port = nexus_database_credential.data["port"],
-        user = nexus_database_credential.username,
-        password = nexus_database_credential.password,
-        database = nexus_database_credential.data["database_name"],
+        host=nexus_database_credential.data["hostname"],
+        port=nexus_database_credential.data["port"],
+        user=nexus_database_credential.username,
+        password=nexus_database_credential.password,
+        database=nexus_database_credential.data["database_name"],
     )
 
     tracker = Tracker(
-        username=tracking_credential.username, 
-        password=tracking_credential.password
+        username=tracking_credential.username, password=tracking_credential.password
     )
 
     logger = logging.getLogger(__name__)
